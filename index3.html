@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Vehicle Statistics</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap">
+    <style>
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 0;
+        }
+        header {
+            background-color: #2c3e50;
+            color: #fff;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .logo {
+            width: 175px;
+            height: 100px;
+            margin-right: 15px;
+        }
+        h1 { font-size: 2rem; font-weight: 600; }
+        h2 {
+            font-size: 1.5rem;
+            color: #34495e;
+            margin-top: 40px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .video-container { margin-bottom: 40px; }
+        video {
+            width: 100%;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .chart-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: space-between;
+        }
+        .chart {
+            flex: 1 1 calc(50% - 10px);
+            min-width: 300px;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .chart-full {
+            flex: 1 1 100%;
+        }
+        footer {
+            margin-top: 40px;
+            background-color: #2c3e50;
+            color: #fff;
+            padding: 10px;
+            text-align: center;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <img src="{{ url_for('static', filename='images/datains.png') }}" alt="Logo" class="logo">
+        <h1>Real-Time Vehicle Detection and Statistics</h1>
+    </header>
+
+    <div class="container">
+        <div class="video-container">
+            <h2>Live YOLOv10 Object Detection Streaming</h2>
+            <video id="video" controls autoplay muted></video>
+        </div>
+
+        <div class="chart-container">
+            <div class="chart">
+                <h2>Current Vehicle Count</h2>
+                <div id="vehicleCountChart"></div>
+            </div>
+            <div class="chart">
+                <h2>Average Vehicle Speed Estimation</h2>
+                <div id="vehicleSpeedChart"></div>
+            </div>
+            <div class="chart">
+                <h2>Vehicle Entry and Exit Tracking</h2>
+                <div id="vehicleEntryExitChart"></div>
+            </div>
+            <div class="chart chart-full">
+                <h2>Vehicle Count Time Series (Per Minute)</h2>
+                <div id="timeSeriesChart"></div>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        © 2024 Vehicle Detection System - All Rights Reserved
+    </footer>
+
+    <script>
+        var video = document.getElementById('video');
+        var hls;
+
+        function loadHLS() {
+            if (Hls.isSupported()) {
+                hls = new Hls({
+                    debug: true,
+                    enableWorker: true,
+                    lowLatencyMode: true,
+                    manifestLoadingTimeOut: 10000,
+                    manifestLoadingMaxRetry: 5,
+                    manifestLoadingRetryDelay: 1000,
+                    levelLoadingTimeOut: 10000,
+                    levelLoadingMaxRetry: 5,
+                    levelLoadingRetryDelay: 1000,
+                    fragLoadingTimeOut: 20000,
+                    fragLoadingMaxRetry: 5,
+                    fragLoadingRetryDelay: 1000
+                });
+
+                hls.loadSource('./static/hls15/output.m3u8');
+                hls.attachMedia(video);
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    console.log('Manifest parsed, starting playback');
+                    video.play();
+                });
+
+                hls.on(Hls.Events.ERROR, function (event, data) {
+                    if (data.fatal) {
+                        switch(data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                console.log('Fatal network error encountered, trying to recover');
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                console.log('Fatal media error encountered, trying to recover');
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                console.log('Fatal error, cannot recover');
+                                hls.destroy();
+                                break;
+                        }
+                    }
+                });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = './static/hls15/output.m3u8';
+                video.addEventListener('loadedmetadata', function() {
+                    video.play();
+                });
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadHLS);
+
+        let timeSeriesData = {
+            'Car': {},
+            'Bus': {},
+            'Truck': {},
+            'Motorcycle': {}
+        };
+
+        function updateCharts() {
+            fetch('/data')
+                .then(response => response.json())
+                .then(data => {
+                    updateCountChart(data);
+                    updateSpeedChart(data);
+                    updateEntryExitChart(data);
+                    updateTimeSeriesChart(data);
+                });
+        }
+
+        function updateCountChart(data) {
+            var vehicleCounts = [
+                data['Car Count'], 
+                data['Bus Count'], 
+                data['Truck Count'], 
+                data['Motorcycle Count']
+            ];
+            
+            var labels = ['Car', 'Bus', 'Truck', 'Motorcycle'];
+            var colors = [
+                'rgba(255, 99, 132, 0.8)',
+                'rgba(54, 162, 235, 0.8)',
+                'rgba(255, 206, 86, 0.8)',
+                'rgba(75, 192, 192, 0.8)'
+            ];
+
+            var chartData = [{
+                x: labels,
+                y: vehicleCounts,
+                type: 'bar',
+                marker: {color: colors}
+            }];
+
+            var layout = {
+                title: 'Current Vehicle Count',
+                xaxis: { title: 'Vehicle Type' },
+                yaxis: { title: 'Count', range: [0, Math.max(...vehicleCounts) + 5] },
+                height: 400,
+                margin: { t: 50, b: 50, l: 50, r: 50 }
+            };
+
+            Plotly.newPlot('vehicleCountChart', chartData, layout);
+        }
+
+        function updateSpeedChart(data) {
+            var avgSpeeds = data.avg_speeds;
+            var labels = Object.keys(avgSpeeds);
+            var speeds = Object.values(avgSpeeds);
+            var colors = [
+                'rgba(255, 99, 132, 0.8)',
+                'rgba(54, 162, 235, 0.8)',
+                'rgba(255, 206, 86, 0.8)',
+                'rgba(75, 192, 192, 0.8)'
+            ];
+
+            var chartData = [{
+                x: labels,
+                y: speeds,
+                type: 'bar',
+                marker: {color: colors}
+            }];
+
+            var layout = {
+                title: 'Average Vehicle Speed Estimation',
+                xaxis: { title: 'Vehicle Type' },
+                yaxis: { title: 'Average Speed (km/h)', range: [0, Math.max(...speeds) + 10] },
+                height: 400,
+                margin: { t: 50, b: 50, l: 50, r: 50 }
+            };
+
+            Plotly.newPlot('vehicleSpeedChart', chartData, layout);
+        }
+
+        function updateEntryExitChart(data) {
+            var vehicleCounts = [
+                data['In'], 
+                data['Out']
+            ];
+            
+            var labels = ['Entry', 'Exit'];
+            var colors = [
+                'rgba(255, 99, 132, 0.8)',
+                'rgba(54, 162, 235, 0.8)'
+            ];
+
+            var chartData = [{
+                x: labels,
+                y: vehicleCounts,
+                type: 'bar',
+                marker: {color: colors}
+            }];
+
+            var layout = {
+                title: 'Vehicle Entry and Exit Tracking',
+                xaxis: { title: 'Tracking Type' },
+                yaxis: { title: 'Count', range: [0, Math.max(...vehicleCounts) + 5] },
+                height: 400,
+                margin: { t: 50, b: 50, l: 50, r: 50 }
+            };
+
+            Plotly.newPlot('vehicleEntryExitChart', chartData, layout);
+        }
+
+        function updateTimeSeriesChart(data) {
+            const time = new Date(data['timestamp']);
+            const minuteKey = time.toISOString().slice(0, 16); 
+
+            ['Car', 'Bus', 'Truck', 'Motorcycle'].forEach(vehicle => {
+                if (!timeSeriesData[vehicle][minuteKey]) {
+                    timeSeriesData[vehicle][minuteKey] = data[`${vehicle} Count`];
+                } else {
+                    timeSeriesData[vehicle][minuteKey] = Math.max(timeSeriesData[vehicle][minuteKey], data[`${vehicle} Count`]);
+                }
+            });
+
+      
+            const keepLastNMinutes = 60;
+            Object.values(timeSeriesData).forEach(vehicleData => {
+                const keys = Object.keys(vehicleData).sort();
+                if (keys.length > keepLastNMinutes) {
+                    const keysToRemove = keys.slice(0, keys.length - keepLastNMinutes);
+                    keysToRemove.forEach(key => delete vehicleData[key]);
+                }
+            });
+
+            const chartData = Object.entries(timeSeriesData).map(([vehicleType, data]) => ({
+                x: Object.keys(data),
+                y: Object.values(data),
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: vehicleType,
+                line: { shape: 'spline', smoothing: 1.3 }
+            }));
+
+            const layout = {
+                title: 'Vehicle Count Time Series (Per Minute)',
+                xaxis: { 
+                    title: 'Time',
+                    tickformat: '%H:%M',
+                    tickangle: -45
+                },
+                yaxis: { title: 'Count' },
+                height: 500,
+                margin: { t: 50, b: 100, l: 50, r: 50 },
+                legend: { orientation: 'h', y: -0.2 },
+                hovermode: 'closest'
+            };
+
+            Plotly.newPlot('timeSeriesChart', chartData, layout);
+        }
+
+        setInterval(updateCharts, 5000);
+        updateCharts();
+    </script>
+</body>
+</html>
